@@ -30,6 +30,13 @@ export const buildApp = async () => {
       return
     }
     if (error instanceof AppError) {
+      if (error.statusCode === 401 && error.errorCode === 'UNAUTHORIZED' && error.message === 'Authorization token is required') {
+        reply.status(401).send({
+          error: 'UNAUTHORIZED',
+          message: 'Authorization token is required',
+        })
+        return
+      }
       reply.status(error.statusCode).send({
         success: false,
         errorCode: error.errorCode,
