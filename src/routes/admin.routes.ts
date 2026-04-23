@@ -1,8 +1,9 @@
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { loginSystemAdmin } from '../services/admin.service.js'
-import { createTenant, getTenantDashboard, listTenants, updateTenant } from '../services/tenants.service.js'
+import { createTenant, getTenantDashboard, listTenants, updateTenant, updateTenantLicense } from '../services/tenants.service.js'
 import { adminMiddleware } from '../middlewares/admin.middleware.js'
+import { allowTenantDevice, deleteTenantDevice, listTenantDevices, updateTenantDeviceStatus } from '../services/devices.service.js'
 import {
   createTenantUser,
   deleteTenantUser,
@@ -50,6 +51,28 @@ const resetPasswordSchema = z.object({
 
 const statusSchema = z.object({
   isActive: z.boolean(),
+})
+
+const deviceParamsSchema = z.object({
+  tenantCode: z.string().min(1),
+  deviceId: z.string().min(1),
+})
+
+const allowDeviceSchema = z.object({
+  deviceId: z.string().min(1),
+  deviceName: z.string().optional().default(''),
+  windowsUsername: z.string().optional().default(''),
+  machineFingerprint: z.string().optional().default(''),
+  userId: z.string().uuid().optional(),
+})
+
+const tenantLicenseSchema = z.object({
+  status: z.enum(['active', 'trial', 'suspended', 'expired']).optional(),
+  subscriptionStatus: z.enum(['active', 'trial', 'suspended', 'expired']).optional(),
+  allowedDevices: z.number().int().min(1).optional(),
+  expiresAt: z.string().nullable().optional(),
+  startsAt: z.string().nullable().optional(),
+  operationMode: z.string().optional(),
 })
 
 const tenantMutationSchema = z.object({
@@ -117,11 +140,16 @@ export const registerAdminRoutes = async (app: FastifyInstance) => {
   const tenantUserPaths = ['/admin/tenants/:tenantCode/users/:userId', '/api/admin/tenants/:tenantCode/users/:userId', '/api/v1/admin/tenants/:tenantCode/users/:userId']
   const tenantUserPasswordPaths = ['/admin/tenants/:tenantCode/users/:userId/password', '/api/admin/tenants/:tenantCode/users/:userId/password', '/api/v1/admin/tenants/:tenantCode/users/:userId/password']
   const tenantUserStatusPaths = ['/admin/tenants/:tenantCode/users/:userId/status', '/api/admin/tenants/:tenantCode/users/:userId/status', '/api/v1/admin/tenants/:tenantCode/users/:userId/status']
+  const tenantLicensePaths = ['/admin/tenants/:tenantCode/license', '/api/admin/tenants/:tenantCode/license', '/api/v1/admin/tenants/:tenantCode/license']
+  const tenantDevicesPaths = ['/admin/tenants/:tenantCode/devices', '/api/admin/tenants/:tenantCode/devices', '/api/v1/admin/tenants/:tenantCode/devices']
+  const tenantAllowDevicePaths = ['/admin/tenants/:tenantCode/devices/allow', '/api/admin/tenants/:tenantCode/devices/allow', '/api/v1/admin/tenants/:tenantCode/devices/allow']
+  const tenantDeviceStatusPaths = ['/admin/tenants/:tenantCode/devices/:deviceId/status', '/api/admin/tenants/:tenantCode/devices/:deviceId/status', '/api/v1/admin/tenants/:tenantCode/devices/:deviceId/status']
+  const tenantDeviceDeletePaths = ['/admin/tenants/:tenantCode/devices/:deviceId', '/api/admin/tenants/:tenantCode/devices/:deviceId', '/api/v1/admin/tenants/:tenantCode/devices/:deviceId']
 
   for (const routePath of loginPaths) {
     app.post(routePath, async (request) => {
       const body = adminLoginSchema.parse(request.body)
-      return loginSystemAdmin(body.username, body.password)
+      return loginSystemAdmin(body.username, body.password, request.log)
     })
   }
 
@@ -200,6 +228,65 @@ export const registerAdminRoutes = async (app: FastifyInstance) => {
       const params = tenantUserParamsSchema.parse(request.params)
       const body = statusSchema.parse(request.body)
       return setTenantUserStatus(params.tenantCode, params.userId, body.isActive)
+    })
+  }
+
+  for (const routePath of tenantLicensePaths) {
+    app.patch(routePath, { preHandler: adminMiddleware }, async (request) => {
+      const params = tenantCodeParamsSchema.parse(request.params)
+      const body = tenantLicenseSchema.parse(request.body)
+      const tenant = await getTenantByCodeForAdmin(params.tenantCode, { includeSecrets: false })
+      return updateTenantLicense(tenant.id, body)
+    })
+  }
+
+  for (const routePath of tenantDevicesPaths) {
+    app.get(routePath, { preHandler: adminMiddleware }, async (request) => {
+      const params = tenantCodeParamsSchema.parse(request.params)
+      const tenant = await getTenantByCodeForAdmin(params.tenantCode, { includeSecrets: false })
+      return {
+        success: true,
+        tenant,
+        devices: await listTenantDevices(tenant.id),
+      }
+    })
+  }
+
+  for (const routePath of tenantAllowDevicePaths) {
+    app.post(routePath, { preHandler: adminMiddleware }, async (request) => {
+      const params = tenantCodeParamsSchema.parse(request.params)
+      const body = allowDeviceSchema.parse(request.body)
+      const tenant = await getTenantByCodeForAdmin(params.tenantCode, { includeSecrets: false })
+      return {
+        success: true,
+        tenant,
+        device: await allowTenantDevice({
+          tenantId: tenant.id,
+          userId: body.userId || null,
+          deviceId: body.deviceId,
+          deviceName: body.deviceName,
+          windowsUsername: body.windowsUsername,
+          machineFingerprint: body.machineFingerprint,
+          ipAddress: String(request.ip || ''),
+        }),
+      }
+    })
+  }
+
+  for (const routePath of tenantDeviceStatusPaths) {
+    app.patch(routePath, { preHandler: adminMiddleware }, async (request) => {
+      const params = deviceParamsSchema.parse(request.params)
+      const body = statusSchema.parse(request.body)
+      const tenant = await getTenantByCodeForAdmin(params.tenantCode, { includeSecrets: false })
+      return updateTenantDeviceStatus(tenant.id, params.deviceId, body.isActive)
+    })
+  }
+
+  for (const routePath of tenantDeviceDeletePaths) {
+    app.delete(routePath, { preHandler: adminMiddleware }, async (request) => {
+      const params = deviceParamsSchema.parse(request.params)
+      const tenant = await getTenantByCodeForAdmin(params.tenantCode, { includeSecrets: false })
+      return deleteTenantDevice(tenant.id, params.deviceId)
     })
   }
 }

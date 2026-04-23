@@ -19,11 +19,25 @@ export const registerAuthRoutes = async (app: FastifyInstance) => {
 
   for (const routePath of loginPaths) {
     app.post(routePath, async (request) => {
-      const body = tenantLoginSchema.parse(request.body)
-      return loginTenantUser({
-        ...body,
-        ipAddress: String(request.ip || ''),
-      })
+      try {
+        const body = tenantLoginSchema.parse(request.body)
+        return await loginTenantUser({
+          ...body,
+          ipAddress: String(request.ip || ''),
+          logger: request.log,
+        })
+      } catch (error) {
+        request.log.error(
+          {
+            err: error,
+            routePath,
+            tenantCode: String((request.body as { tenantCode?: unknown } | undefined)?.tenantCode || '').trim().toUpperCase(),
+            username: String((request.body as { username?: unknown } | undefined)?.username || '').trim().toLowerCase(),
+          },
+          'tenant login endpoint failed',
+        )
+        throw error
+      }
     })
   }
 

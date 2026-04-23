@@ -1,6 +1,5 @@
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
-import { requireMigrationAuthorization } from '../middlewares/auth.middleware.js'
 import { tenantMiddleware } from '../middlewares/tenant.middleware.js'
 import {
   cancelMigration,
@@ -59,88 +58,88 @@ export const registerMigrationRoutes = async (app: FastifyInstance) => {
   const cancelPaths = ['/migration/:migrationId/cancel', '/api/migration/:migrationId/cancel', '/api/v1/migration/:migrationId/cancel']
 
   for (const routePath of validatePaths) {
-    app.post(routePath, { onRequest: requireMigrationAuthorization, preHandler: tenantMiddleware }, async (request) =>
+    app.post(routePath, { preHandler: tenantMiddleware }, async (request) =>
       validateMigrationAccess(request.tenantUser!),
     )
   }
 
   for (const routePath of previewPaths) {
-    app.post(routePath, { onRequest: requireMigrationAuthorization, preHandler: tenantMiddleware }, async (request) =>
+    app.post(routePath, { preHandler: tenantMiddleware }, async (request) =>
       validateMigrationAccess(request.tenantUser!),
     )
   }
 
   for (const routePath of checkExistingPaths) {
-    app.post(routePath, { onRequest: requireMigrationAuthorization, preHandler: tenantMiddleware }, async (request) => {
+    app.post(routePath, { preHandler: tenantMiddleware }, async (request) => {
       const body = checkExistingSchema.parse(request.body)
       return checkExistingMigration(request.tenantUser!, body.sourceDbFingerprint)
     })
   }
 
   for (const routePath of initPaths) {
-    app.post(routePath, { onRequest: requireMigrationAuthorization, preHandler: tenantMiddleware }, async (request) => {
+    app.post(routePath, { preHandler: tenantMiddleware }, async (request) => {
       const body = initSchema.parse(request.body)
       return initMigration(request.tenantUser!, body)
     })
   }
 
   for (const routePath of startPaths) {
-    app.post(routePath, { onRequest: requireMigrationAuthorization, preHandler: tenantMiddleware }, async (request) => {
+    app.post(routePath, { preHandler: tenantMiddleware }, async (request) => {
       const body = initSchema.parse(request.body)
       return initMigration(request.tenantUser!, body)
     })
   }
 
   for (const routePath of preparePaths) {
-    app.post(routePath, { onRequest: requireMigrationAuthorization, preHandler: tenantMiddleware }, async (request) =>
+    app.post(routePath, { preHandler: tenantMiddleware }, async (request) =>
       prepareMigrationTenantDb(request.tenantUser!),
     )
   }
 
   for (const routePath of batchPaths) {
-    app.post(routePath, { onRequest: requireMigrationAuthorization, preHandler: tenantMiddleware }, async (request) => {
+    app.post(routePath, { preHandler: tenantMiddleware }, async (request) => {
       const body = batchSchema.parse(request.body)
       return saveMigrationBatch(request.tenantUser!, body)
     })
   }
 
   for (const routePath of executePaths) {
-    app.post(routePath, { onRequest: requireMigrationAuthorization, preHandler: tenantMiddleware }, async (request) => {
+    app.post(routePath, { preHandler: tenantMiddleware }, async (request) => {
       const body = batchSchema.parse(request.body)
       return saveMigrationBatch(request.tenantUser!, body)
     })
   }
 
   for (const routePath of finalizePaths) {
-    app.post(routePath, { onRequest: requireMigrationAuthorization, preHandler: tenantMiddleware }, async (request) => {
+    app.post(routePath, { preHandler: tenantMiddleware }, async (request) => {
       const body = finalizeSchema.parse(request.body)
       return finalizeMigration(request.tenantUser!, body)
     })
   }
 
   for (const routePath of genericStatusPaths) {
-    app.post(routePath, { onRequest: requireMigrationAuthorization, preHandler: tenantMiddleware }, async (request) => {
+    app.post(routePath, { preHandler: tenantMiddleware }, async (request) => {
       const body = z.object({ migrationId: z.string().uuid() }).parse(request.body)
       return getMigrationStatus(request.tenantUser!, body.migrationId)
     })
   }
 
   for (const routePath of statusPaths) {
-    app.get(routePath, { onRequest: requireMigrationAuthorization, preHandler: tenantMiddleware }, async (request) => {
+    app.get(routePath, { preHandler: tenantMiddleware }, async (request) => {
       const params = z.object({ migrationId: z.string().uuid() }).parse(request.params)
       return getMigrationStatus(request.tenantUser!, params.migrationId)
     })
   }
 
   for (const routePath of reportPaths) {
-    app.get(routePath, { onRequest: requireMigrationAuthorization, preHandler: tenantMiddleware }, async (request) => {
+    app.get(routePath, { preHandler: tenantMiddleware }, async (request) => {
       const params = z.object({ migrationId: z.string().uuid() }).parse(request.params)
       return getMigrationReport(request.tenantUser!, params.migrationId)
     })
   }
 
   for (const routePath of cancelPaths) {
-    app.post(routePath, { onRequest: requireMigrationAuthorization, preHandler: tenantMiddleware }, async (request) => {
+    app.post(routePath, { preHandler: tenantMiddleware }, async (request) => {
       const params = z.object({ migrationId: z.string().uuid() }).parse(request.params)
       return cancelMigration(request.tenantUser!, params.migrationId)
     })

@@ -11,6 +11,21 @@ type DeviceUpsertInput = {
   ipAddress?: string
 }
 
+const mapDeviceRow = (row: Record<string, any>) => ({
+  id: row.id,
+  userId: row.user_id,
+  deviceId: row.device_id,
+  deviceName: row.device_name,
+  windowsUsername: row.windows_username,
+  machineFingerprint: row.machine_fingerprint,
+  lastIp: row.last_ip,
+  isActive: row.is_active,
+  status: row.is_active ? 'active' : 'disabled',
+  lastLoginAt: row.last_login_at,
+  lastSeenAt: row.last_seen_at,
+  createdAt: row.created_at,
+})
+
 export const getTenantDeviceByDeviceId = async (tenantId: string, deviceId: string) => {
   const result = await controlDb.query<{
     id: string
@@ -112,6 +127,51 @@ export const upsertDeviceLogin = async (params: DeviceUpsertInput) => {
   await registerTenantDevice(params)
 }
 
+export const allowTenantDevice = async (params: DeviceUpsertInput) => {
+  const result = await controlDb.query<{
+    id: string
+    user_id: string | null
+    device_id: string
+    device_name: string | null
+    windows_username: string | null
+    machine_fingerprint: string | null
+    last_ip: string | null
+    is_active: boolean
+    last_login_at: string | null
+    last_seen_at: string | null
+    created_at: string
+  }>(
+    `
+      INSERT INTO devices (
+        tenant_id, user_id, device_id, device_name, windows_username, machine_fingerprint, last_ip, is_active, last_login_at, last_seen_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, TRUE, NOW(), NOW())
+      ON CONFLICT (tenant_id, device_id)
+      DO UPDATE SET
+        user_id = COALESCE(EXCLUDED.user_id, devices.user_id),
+        device_name = COALESCE(NULLIF(EXCLUDED.device_name, ''), devices.device_name),
+        windows_username = COALESCE(NULLIF(EXCLUDED.windows_username, ''), devices.windows_username),
+        machine_fingerprint = COALESCE(NULLIF(EXCLUDED.machine_fingerprint, ''), devices.machine_fingerprint),
+        last_ip = COALESCE(NULLIF(EXCLUDED.last_ip, ''), devices.last_ip),
+        is_active = TRUE,
+        last_login_at = NOW(),
+        last_seen_at = NOW()
+      RETURNING id, user_id, device_id, device_name, windows_username, machine_fingerprint, last_ip,
+                is_active, last_login_at, last_seen_at, created_at
+    `,
+    [
+      params.tenantId,
+      params.userId || null,
+      params.deviceId,
+      params.deviceName || null,
+      params.windowsUsername || null,
+      params.machineFingerprint || null,
+      params.ipAddress || null,
+    ],
+  )
+  return mapDeviceRow(result.rows[0])
+}
+
 export const listTenantDevices = async (tenantId: string) => {
   const result = await controlDb.query(
     `
@@ -123,31 +183,18 @@ export const listTenantDevices = async (tenantId: string) => {
     `,
     [tenantId],
   )
-  return result.rows.map((row) => ({
-    id: row.id,
-    userId: row.user_id,
-    deviceId: row.device_id,
-    deviceName: row.device_name,
-    windowsUsername: row.windows_username,
-    machineFingerprint: row.machine_fingerprint,
-    lastIp: row.last_ip,
-    isActive: row.is_active,
-    status: row.is_active ? 'active' : 'disabled',
-    lastLoginAt: row.last_login_at,
-    lastSeenAt: row.last_seen_at,
-    createdAt: row.created_at,
-  }))
+  return result.rows.map(mapDeviceRow)
 }
 
-export const updateTenantDeviceStatus = async (tenantId: string, deviceRecordId: string, isActive: boolean) => {
+export const updateTenantDeviceStatus = async (tenantId: string, deviceKey: string, isActive: boolean) => {
   const result = await controlDb.query(
     `
       UPDATE devices
       SET is_active = $3, last_seen_at = NOW()
-      WHERE tenant_id = $1 AND id = $2
+      WHERE tenant_id = $1 AND (id::text = $2 OR device_id = $2)
       RETURNING id
     `,
-    [tenantId, deviceRecordId, isActive],
+    [tenantId, deviceKey, isActive],
   )
   if (!result.rowCount) {
     throw notFound('DEVICE_NOT_FOUND', 'Device not found')
@@ -155,10 +202,10 @@ export const updateTenantDeviceStatus = async (tenantId: string, deviceRecordId:
   return { success: true }
 }
 
-export const deleteTenantDevice = async (tenantId: string, deviceRecordId: string) => {
+export const deleteTenantDevice = async (tenantId: string, deviceKey: string) => {
   const result = await controlDb.query(
-    `DELETE FROM devices WHERE tenant_id = $1 AND id = $2 RETURNING id`,
-    [tenantId, deviceRecordId],
+    `DELETE FROM devices WHERE tenant_id = $1 AND (id::text = $2 OR device_id = $2) RETURNING id`,
+    [tenantId, deviceKey],
   )
   if (!result.rowCount) {
     throw notFound('DEVICE_NOT_FOUND', 'Device not found')

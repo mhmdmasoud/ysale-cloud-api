@@ -18,3 +18,5 @@ export const notFound = (code = 'NOT_FOUND', message = 'Not found') =>
   new AppError(404, code, message)
 export const conflict = (code = 'CONFLICT', message = 'Conflict') =>
   new AppError(409, code, message)
+export const internalServerError = (code = 'INTERNAL_SERVER_ERROR', message = 'Internal server error') =>
+  new AppError(500, code, message)

@@ -16,7 +16,7 @@ export const buildApp = async () => {
   await app.register(cors, { origin: true, credentials: true })
   await app.register(helmet)
 
-  app.setErrorHandler((error, _request, reply) => {
+  app.setErrorHandler((error, request, reply) => {
     if (error instanceof ZodError) {
       reply.status(400).send({
         success: false,
@@ -37,6 +37,17 @@ export const buildApp = async () => {
         })
         return
       }
+      const logMethod = error.statusCode >= 500 ? request.log.error.bind(request.log) : request.log.warn.bind(request.log)
+      logMethod(
+        {
+          err: error,
+          errorCode: error.errorCode,
+          statusCode: error.statusCode,
+          method: request.method,
+          url: request.url,
+        },
+        'request failed with application error',
+      )
       reply.status(error.statusCode).send({
         success: false,
         errorCode: error.errorCode,
@@ -44,7 +55,36 @@ export const buildApp = async () => {
       })
       return
     }
+    const fastifyStatusCode = Number((error as { statusCode?: unknown })?.statusCode || 0)
+    const fastifyErrorCode = String((error as { code?: unknown })?.code || 'BAD_REQUEST')
+    if (fastifyStatusCode >= 400 && fastifyStatusCode < 500) {
+      request.log.warn(
+        {
+          err: error,
+          errorCode: fastifyErrorCode,
+          statusCode: fastifyStatusCode,
+          method: request.method,
+          url: request.url,
+        },
+        'request failed before reaching route handler',
+      )
+      reply.status(fastifyStatusCode).send({
+        success: false,
+        errorCode: fastifyErrorCode,
+        message: error instanceof Error ? error.message : 'Bad request',
+      })
+      return
+    }
     const message = error instanceof Error ? error.message : 'Internal server error'
+    request.log.error(
+      {
+        err: error,
+        errorCode: 'INTERNAL_SERVER_ERROR',
+        method: request.method,
+        url: request.url,
+      },
+      'unhandled request error',
+    )
     reply.status(500).send({
       success: false,
       errorCode: 'INTERNAL_SERVER_ERROR',
@@ -56,14 +96,6 @@ export const buildApp = async () => {
   await registerAuthRoutes(app)
   await registerAdminRoutes(app)
   await registerMigrationRoutes(app)
-
-  app.setNotFoundHandler((request, reply) => {
-    reply.status(404).send({
-      success: false,
-      errorCode: 'ROUTE_NOT_FOUND',
-      message: `Route ${request.method} ${request.url} not found`,
-    })
-  })
 
   return app
 }
