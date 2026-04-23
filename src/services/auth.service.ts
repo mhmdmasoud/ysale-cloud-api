@@ -2,6 +2,7 @@ import type { FastifyBaseLogger } from 'fastify'
 import { controlDb } from '../db/controlDb.js'
 import { badRequest, forbidden, internalServerError, notFound, unauthorized, type AppError } from '../utils/errors.js'
 import { loadEnv } from '../config/env.js'
+import { describeDatabaseUrl } from '../db/connectionDiagnostics.js'
 import { signTenantToken } from '../utils/jwt.js'
 import { verifyPassword } from '../utils/password.js'
 import { assertTenantDeviceAllowed, upsertDeviceLogin } from './devices.service.js'
@@ -82,7 +83,17 @@ const assertLoginInfrastructure = async (logger: AuthLogger | Console, diagnosti
     throw internalServerError('AUTH_INFRASTRUCTURE_ERROR', 'database connection failed')
   }
 
-  loadEnv()
+  const env = loadEnv()
+  writeLog(
+    logger,
+    'info',
+    {
+      tenantCode: diagnostics.tenantCode,
+      loginUsername: diagnostics.username,
+      ...describeDatabaseUrl(env.CONTROL_DATABASE_URL, 'CONTROL_DATABASE_URL'),
+    },
+    'tenant login infrastructure: resolved database connection config',
+  )
 
   await controlDb.query('SELECT 1')
   diagnostics.databaseConnectionOk = true

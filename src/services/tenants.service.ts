@@ -1,4 +1,5 @@
 import { controlDb } from '../db/controlDb.js'
+import { describeDatabaseUrl, isUsablePostgresUrl } from '../db/connectionDiagnostics.js'
 import { badRequest, conflict, notFound } from '../utils/errors.js'
 import { maskDatabaseUrl } from '../utils/crypto.js'
 import { hashPassword } from '../utils/password.js'
@@ -36,6 +37,19 @@ export type CreateTenantInput = {
 export type UpdateTenantInput = Partial<CreateTenantInput>
 
 const normalizeTenantCode = (value: string) => value.trim().toUpperCase()
+
+const normalizeTenantDatabaseUrlInput = (value: unknown) => {
+  const raw = String(value || '').trim()
+  if (!raw) return ''
+  if (!isUsablePostgresUrl(raw)) {
+    const info = describeDatabaseUrl(raw, 'tenantDatabaseUrl')
+    throw badRequest(
+      'INVALID_TENANT_DATABASE_URL',
+      `Invalid tenant database URL. Expected a postgres:// or postgresql:// URL, received host "${info.host || 'unknown'}".`,
+    )
+  }
+  return raw
+}
 
 const normalizeOperationMode = (value: string | undefined): TenantOperationMode => {
   const raw = String(value || 'online').trim().toLowerCase()
@@ -211,13 +225,14 @@ export const createTenant = async (input: CreateTenantInput) => {
       ],
     )
     const tenantId = tenantResult.rows[0].id
-    if (String(input.tenantDatabaseUrl || '').trim()) {
+    const tenantDatabaseUrl = normalizeTenantDatabaseUrlInput(input.tenantDatabaseUrl)
+    if (tenantDatabaseUrl) {
       await client.query(
         `
           INSERT INTO tenant_databases (tenant_id, database_url)
           VALUES ($1, $2)
         `,
-        [tenantId, String(input.tenantDatabaseUrl || '').trim()],
+        [tenantId, tenantDatabaseUrl],
       )
     }
     if (hasAdminUsername && hasAdminPassword) {
@@ -326,7 +341,7 @@ export const updateTenant = async (tenantId: string, input: UpdateTenantInput) =
     ],
   )
   if (input.tenantDatabaseUrl !== undefined) {
-    const nextUrl = String(input.tenantDatabaseUrl || '').trim()
+    const nextUrl = normalizeTenantDatabaseUrlInput(input.tenantDatabaseUrl)
     if (nextUrl) {
       await controlDb.query(`UPDATE tenant_databases SET is_active = FALSE WHERE tenant_id = $1`, [tenantId])
       await controlDb.query(

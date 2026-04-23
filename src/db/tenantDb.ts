@@ -1,16 +1,22 @@
 import pg from 'pg'
+import { describeDatabaseUrl } from './connectionDiagnostics.js'
 
 const tenantPools = new Map<string, pg.Pool>()
 
 export const getTenantPool = (tenantId: string, databaseUrl: string) => {
-  const cached = tenantPools.get(tenantId)
+  const cacheKey = `${tenantId}:${databaseUrl}`
+  const cached = tenantPools.get(cacheKey)
   if (cached) return cached
+  console.info('[db] opening tenant database connection', {
+    tenantId,
+    ...describeDatabaseUrl(databaseUrl, 'tenant-database-url'),
+  })
   const pool = new pg.Pool({
     connectionString: databaseUrl,
     ssl: databaseUrl.includes('supabase.com') ? { rejectUnauthorized: false } : undefined,
     max: 5,
   })
-  tenantPools.set(tenantId, pool)
+  tenantPools.set(cacheKey, pool)
   return pool
 }
 

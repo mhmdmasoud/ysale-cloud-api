@@ -92,28 +92,28 @@ export const registerMigrationRoutes = async (app: FastifyInstance) => {
 
   for (const routePath of preparePaths) {
     app.post(routePath, { preHandler: tenantMiddleware }, async (request) =>
-      prepareMigrationTenantDb(request.tenantUser!),
+      prepareMigrationTenantDb(request.tenantUser!, { logger: request.log }),
     )
   }
 
   for (const routePath of batchPaths) {
     app.post(routePath, { preHandler: tenantMiddleware }, async (request) => {
       const body = batchSchema.parse(request.body)
-      return saveMigrationBatch(request.tenantUser!, body)
+      return saveMigrationBatch(request.tenantUser!, body, { logger: request.log })
     })
   }
 
   for (const routePath of executePaths) {
     app.post(routePath, { preHandler: tenantMiddleware }, async (request) => {
       const body = batchSchema.parse(request.body)
-      return saveMigrationBatch(request.tenantUser!, body)
+      return saveMigrationBatch(request.tenantUser!, body, { logger: request.log })
     })
   }
 
   for (const routePath of finalizePaths) {
     app.post(routePath, { preHandler: tenantMiddleware }, async (request) => {
       const body = finalizeSchema.parse(request.body)
-      return finalizeMigration(request.tenantUser!, body)
+      return finalizeMigration(request.tenantUser!, body, { logger: request.log })
     })
   }
 

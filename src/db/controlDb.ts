@@ -1,11 +1,13 @@
 import pg from 'pg'
 import { loadEnv } from '../config/env.js'
+import { describeDatabaseUrl } from './connectionDiagnostics.js'
 
 let pool: pg.Pool | null = null
 
 const getPool = () => {
   if (pool) return pool
   const env = loadEnv()
+  console.info('[db] opening control database connection', describeDatabaseUrl(env.CONTROL_DATABASE_URL, 'CONTROL_DATABASE_URL'))
   pool = new pg.Pool({
     connectionString: env.CONTROL_DATABASE_URL,
     ssl: env.CONTROL_DATABASE_URL.includes('supabase.com')

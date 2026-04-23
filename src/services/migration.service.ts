@@ -1,7 +1,7 @@
 import { controlDb } from '../db/controlDb.js'
 import { getTenantPool } from '../db/tenantDb.js'
-import { badRequest, forbidden, notFound } from '../utils/errors.js'
-import { getTenantDatabaseUrl } from './tenantDatabase.service.js'
+import { badRequest, forbidden, internalServerError, notFound, type AppError } from '../utils/errors.js'
+import { resolveTenantDatabaseConfig } from './tenantDatabase.service.js'
 import { compareMigrationResult } from './migrationComparison.service.js'
 import { prepareTenantMigrationSchema } from './tenantSchemaMigration.service.js'
 
@@ -16,6 +16,87 @@ type TenantUser = {
 }
 
 type MigrationRecord = Record<string, unknown>
+type MigrationLogger = Pick<Console, 'info' | 'warn' | 'error'>
+type MigrationServiceOptions = {
+  logger?: MigrationLogger
+}
+
+const isAppError = (error: unknown): error is AppError => error instanceof Error && 'statusCode' in error && 'errorCode' in error
+
+const writeMigrationLog = (
+  logger: MigrationLogger | undefined,
+  level: 'info' | 'warn' | 'error',
+  payload: Record<string, unknown>,
+  message: string,
+) => {
+  const target = logger || console
+  const fn = target[level] || console[level]
+  if (target === console) {
+    fn.call(target, message, payload)
+    return
+  }
+  fn.call(target, payload, message)
+}
+
+const isDatabaseConnectionError = (error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error || '')
+  const code = typeof error === 'object' && error && 'code' in error ? String((error as { code?: unknown }).code || '') : ''
+  return (
+    code.startsWith('08')
+    || code === 'ENOTFOUND'
+    || code === 'ECONNREFUSED'
+    || code === 'ETIMEDOUT'
+    || /getaddrinfo|ENOTFOUND|ECONNREFUSED|timeout|password authentication failed|no pg_hba.conf|database .* does not exist/i.test(message)
+  )
+}
+
+const throwMigrationDatabaseConnectionError = (
+  error: unknown,
+  logger: MigrationLogger | undefined,
+  context: string,
+  diagnostics: Record<string, unknown>,
+): never => {
+  writeMigrationLog(
+    logger,
+    'error',
+    {
+      context,
+      ...diagnostics,
+      errorMessage: error instanceof Error ? error.message : String(error),
+      stackTrace: error instanceof Error ? error.stack : undefined,
+    },
+    'migration database connection failed',
+  )
+  throw internalServerError(
+    'MIGRATION_SERVER_DATABASE_CONNECTION_FAILED',
+    'فشل الاتصال بقاعدة بيانات السيرفر أثناء تجهيز الترحيل',
+  )
+}
+
+const resolveMigrationTenantPool = async (
+  user: TenantUser,
+  logger: MigrationLogger | undefined,
+  context: string,
+) => {
+  const config = await resolveTenantDatabaseConfig(user.tenantId, { logger, context })
+  writeMigrationLog(
+    logger,
+    'info',
+    {
+      context,
+      tenantId: user.tenantId,
+      tenantCode: user.tenantCode,
+      databaseSource: config.source,
+      ...config.diagnostics,
+      tenantDatabaseDiagnostics: config.tenantDatabaseDiagnostics,
+    },
+    'migration resolved database connection config',
+  )
+  return {
+    pool: getTenantPool(user.tenantId, config.databaseUrl),
+    config,
+  }
+}
 
 const assertMigrationAdmin = (user: TenantUser) => {
   if (String(user.role || '').toLowerCase() !== 'admin') {
@@ -140,11 +221,23 @@ export const initMigration = async (
   return { success: true, migrationId: result.rows[0].id }
 }
 
-export const prepareMigrationTenantDb = async (user: TenantUser) => {
+export const prepareMigrationTenantDb = async (user: TenantUser, options: MigrationServiceOptions = {}) => {
   assertMigrationAdmin(user)
-  const databaseUrl = await getTenantDatabaseUrl(user.tenantId)
-  const pool = getTenantPool(user.tenantId, databaseUrl)
-  await prepareTenantMigrationSchema(pool)
+  const { pool, config } = await resolveMigrationTenantPool(user, options.logger, 'migration.prepare-tenant-db')
+  try {
+    await prepareTenantMigrationSchema(pool)
+  } catch (error) {
+    if (isDatabaseConnectionError(error)) {
+      throwMigrationDatabaseConnectionError(error, options.logger, 'migration.prepare-tenant-db', {
+        tenantId: user.tenantId,
+        tenantCode: user.tenantCode,
+        databaseSource: config.source,
+        ...config.diagnostics,
+        tenantDatabaseDiagnostics: config.tenantDatabaseDiagnostics,
+      })
+    }
+    throw error
+  }
   return { success: true }
 }
 
@@ -182,6 +275,7 @@ export const saveMigrationBatch = async (
     totalBatches: number
     records: MigrationRecord[]
   },
+  options: MigrationServiceOptions = {},
 ) => {
   assertMigrationAdmin(user)
   if (!payload.migrationId || !payload.entityType) throw badRequest('VALIDATION_ERROR', 'migrationId and entityType are required')
@@ -190,10 +284,23 @@ export const saveMigrationBatch = async (
   if (job.status === 'cancelled') throw forbidden('MIGRATION_CANCELLED', 'Migration was cancelled')
   if (!['running', 'pending'].includes(job.status)) throw forbidden('MIGRATION_NOT_RUNNING', 'Migration is not running')
 
-  await prepareMigrationTenantDb(user)
-  const databaseUrl = await getTenantDatabaseUrl(user.tenantId)
-  const pool = getTenantPool(user.tenantId, databaseUrl)
-  const tenantClient = await pool.connect()
+  await prepareMigrationTenantDb(user, options)
+  const { pool, config } = await resolveMigrationTenantPool(user, options.logger, 'migration.save-batch')
+  const tenantClient = await pool.connect().catch((error) => {
+    if (isDatabaseConnectionError(error)) {
+      throwMigrationDatabaseConnectionError(error, options.logger, 'migration.save-batch.connect', {
+        tenantId: user.tenantId,
+        tenantCode: user.tenantCode,
+        migrationId: payload.migrationId,
+        entityType: payload.entityType,
+        batchIndex: payload.batchIndex,
+        databaseSource: config.source,
+        ...config.diagnostics,
+        tenantDatabaseDiagnostics: config.tenantDatabaseDiagnostics,
+      })
+    }
+    throw error
+  })
   try {
     await controlDb.query(
       `
@@ -232,6 +339,21 @@ export const saveMigrationBatch = async (
     return { success: true, recordsCount: payload.records.length }
   } catch (error) {
     await tenantClient.query('ROLLBACK').catch(() => undefined)
+    if (isAppError(error)) {
+      throw error
+    }
+    if (isDatabaseConnectionError(error)) {
+      throwMigrationDatabaseConnectionError(error, options.logger, 'migration.save-batch.query', {
+        tenantId: user.tenantId,
+        tenantCode: user.tenantCode,
+        migrationId: payload.migrationId,
+        entityType: payload.entityType,
+        batchIndex: payload.batchIndex,
+        databaseSource: config.source,
+        ...config.diagnostics,
+        tenantDatabaseDiagnostics: config.tenantDatabaseDiagnostics,
+      })
+    }
     const message = error instanceof Error ? error.message : String(error)
     await controlDb.query(
       `
@@ -258,12 +380,13 @@ export const saveMigrationBatch = async (
 export const finalizeMigration = async (
   user: TenantUser,
   payload: { migrationId: string; totalsAfter?: Record<string, unknown> },
+  options: MigrationServiceOptions = {},
 ) => {
   assertMigrationAdmin(user)
   const job = await getMigrationJob(user, payload.migrationId)
-  await prepareMigrationTenantDb(user)
-  const databaseUrl = await getTenantDatabaseUrl(user.tenantId)
-  const pool = getTenantPool(user.tenantId, databaseUrl)
+  await prepareMigrationTenantDb(user, options)
+  const { pool, config } = await resolveMigrationTenantPool(user, options.logger, 'migration.finalize')
+  try {
   const countsResult = await pool.query<{ entity_type: string; count: string }>(
     `
       SELECT entity_type, COUNT(*)::TEXT AS count
@@ -356,6 +479,19 @@ export const finalizeMigration = async (
     ],
   )
   return { success: true, status: comparison.status, countsAfter, totalsAfter, comparisonResult: comparison }
+  } catch (error) {
+    if (isDatabaseConnectionError(error)) {
+      throwMigrationDatabaseConnectionError(error, options.logger, 'migration.finalize.query', {
+        tenantId: user.tenantId,
+        tenantCode: user.tenantCode,
+        migrationId: payload.migrationId,
+        databaseSource: config.source,
+        ...config.diagnostics,
+        tenantDatabaseDiagnostics: config.tenantDatabaseDiagnostics,
+      })
+    }
+    throw error
+  }
 }
 
 export const getMigrationStatus = async (user: TenantUser, migrationId: string) => {
